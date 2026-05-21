@@ -1,4 +1,5 @@
 import os
+import secrets
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -25,5 +26,20 @@ class Config:
         or 'sqlite:///kafkam.db'
     )
     SQLALCHEMY_TRACK_MODIFICATIONS = False
-    WTF_CSRF_ENABLED = False
+    SQLALCHEMY_ENGINE_OPTIONS = {
+        "pool_pre_ping": True,      # detect stale connections
+        "pool_recycle": 300,        # recycle connections every 5 min
+    }
+
+    WTF_CSRF_ENABLED = False        # No WTForms used; forms protected by login_required
     TEMPLATES_AUTO_RELOAD = True
+
+    # Session hardening
+    SESSION_COOKIE_HTTPONLY = True
+    SESSION_COOKIE_SAMESITE = 'Lax'
+    # Railway always serves HTTPS — enable Secure cookie flag
+    SESSION_COOKIE_SECURE = os.environ.get('RAILWAY_ENVIRONMENT') is not None
+
+    # Rate limiter storage (in-memory is fine for single-dyno Railway deployments)
+    RATELIMIT_STORAGE_URI = "memory://"
+    RATELIMIT_STRATEGY = "fixed-window"

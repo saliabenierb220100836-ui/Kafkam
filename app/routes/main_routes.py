@@ -1,43 +1,59 @@
 import os
+import re
 import subprocess
-import threading
 import time
+import logging
 from flask import (Response, stream_with_context, render_template,
                    redirect, url_for, request, flash, Blueprint,
                    make_response, session, jsonify)
 from flask_login import login_user, logout_user, login_required, current_user
 from app.models.user import User
 from app.models.log import AuditLog
-from app import db
+from app import db, limiter
 import requests
 
+logger = logging.getLogger(__name__)
 main = Blueprint('main', __name__)
+
+# ─── Allowed camera URL schemes ───────────────────────────────────────────────
+_ALLOWED_SNAPSHOT_SCHEMES = re.compile(r'^https?://', re.IGNORECASE)
+_ALLOWED_RTSP_SCHEMES = re.compile(r'^rtsps?://', re.IGNORECASE)
+
+def _validate_camera_url(url: str, mode: str) -> bool:
+    """Reject anything that isn't a plain http/https/rtsp URL."""
+    if not url:
+        return False
+    if mode == 'snapshot':
+        return bool(_ALLOWED_SNAPSHOT_SCHEMES.match(url))
+    if mode == 'rtsp':
+        return bool(_ALLOWED_RTSP_SCHEMES.match(url))
+    return False
+
 
 # ─── Camera source resolution ─────────────────────────────────────────────────
 def get_camera_mode():
     rtsp = os.environ.get('CAMERA_RTSP_URL', '').strip()
     snap = os.environ.get('CAMERA_URL', '').strip()
     mode = os.environ.get('CAMERA_MODE', '').strip().lower()
-    
-    if mode == 'mjpeg' and snap:
+
+    if mode == 'mjpeg' and snap and _validate_camera_url(snap, 'snapshot'):
         return 'snapshot', snap
-    if rtsp:
+    if rtsp and _validate_camera_url(rtsp, 'rtsp'):
         return 'rtsp', rtsp
-    if snap:
+    if snap and _validate_camera_url(snap, 'snapshot'):
         return 'snapshot', snap
     return 'demo', None
 
 
 def check_camera_live(camera_url, timeout=3):
-    if not camera_url:
+    if not camera_url or not _validate_camera_url(camera_url, 'snapshot'):
         return False
     try:
-        headers = {
-            "User-Agent": "KafkamCCTV/1.0",
-            "Accept": "*/*"
-        }
-        # Explicitly read a tiny chunk to see if the Bore stream is alive
-        response = requests.get(camera_url, headers=headers, timeout=timeout, stream=True)
+        headers = {"User-Agent": "KafkamCCTV/1.0", "Accept": "*/*"}
+        response = requests.get(
+            camera_url, headers=headers, timeout=timeout,
+            stream=True, allow_redirects=False   # don't follow open-redirect chains
+        )
         return response.status_code == 200
     except Exception:
         return False
@@ -47,6 +63,10 @@ def check_camera_live(camera_url, timeout=3):
 
 def _generate_rtsp(rtsp_url):
     """Pull RTSP with ffmpeg and emit MJPEG multipart frames."""
+    if not _validate_camera_url(rtsp_url, 'rtsp'):
+        logger.error("Blocked invalid RTSP URL: %s", rtsp_url)
+        return
+
     cmd = [
         'ffmpeg',
         '-rtsp_transport', 'tcp',
@@ -67,46 +87,64 @@ def _generate_rtsp(rtsp_url):
             if not chunk:
                 break
             data += chunk
+            # Prevent unbounded memory growth if JPEG markers never appear
+            if len(data) > 10 * 1024 * 1024:
+                data = b''
+                continue
             start = data.find(b'\xff\xd8')
-            end = data.find(b'\xff\xd9')
+            end   = data.find(b'\xff\xd9')
             if start != -1 and end != -1 and end > start:
                 frame = data[start:end + 2]
-                data = data[end + 2:]
+                data  = data[end + 2:]
                 yield (b'--frame\r\n'
                        b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
     finally:
         process.kill()
 
+
 def _generate_snapshot(snapshot_url):
-    """Pulls live binary stream fragments over the unencrypted tunnel and re-hosts them securely."""
-    headers = {
-        "User-Agent": "KafkamCCTV/1.0"
-    }
-    
-    if 'bore.pub' in snapshot_url or 'cam1' in snapshot_url or snapshot_url.endswith('/video'):
+    """Relay a remote MJPEG/snapshot stream securely."""
+    if not _validate_camera_url(snapshot_url, 'snapshot'):
+        logger.error("Blocked invalid snapshot URL: %s", snapshot_url)
+        return
+
+    headers = {"User-Agent": "KafkamCCTV/1.0"}
+    is_mjpeg_stream = any(
+        tok in snapshot_url
+        for tok in ('bore.pub', 'cam1', '/video', '/stream', '/mjpeg')
+    )
+
+    if is_mjpeg_stream:
         while True:
             try:
-                # Continuously grab chunks from the local Bore instance to relay upstream
-                with requests.get(snapshot_url, headers=headers, stream=True, timeout=5) as r:
+                with requests.get(
+                    snapshot_url, headers=headers,
+                    stream=True, timeout=5,
+                    allow_redirects=False
+                ) as r:
                     if r.status_code == 200:
-                        for chunk in r.iter_content(chunk_size=1024 * 64):
+                        for chunk in r.iter_content(chunk_size=64 * 1024):
                             if chunk:
                                 yield chunk
             except Exception as e:
-                print(f"Tunnel pipeline connection waiting: {e}")
+                logger.debug("Stream reconnect: %s", e)
                 time.sleep(2)
     else:
-        # Fallback to standard static image refresh polling loop
         while True:
             try:
-                response = requests.get(snapshot_url, headers=headers, timeout=5)
+                response = requests.get(
+                    snapshot_url, headers=headers,
+                    timeout=5, allow_redirects=False
+                )
                 if response.status_code == 200:
-                    frame = response.content
+                    # Enforce a 10 MB frame size cap to prevent memory exhaustion
+                    frame = response.content[:10 * 1024 * 1024]
                     yield (b'--frame\r\n'
                            b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
             except Exception:
                 pass
             time.sleep(0.1)  # ~10 fps
+
 
 def _generate_demo():
     """Generate a live demo test pattern via ffmpeg (no hardware needed)."""
@@ -135,11 +173,14 @@ def _generate_demo():
             if not chunk:
                 break
             data += chunk
+            if len(data) > 10 * 1024 * 1024:
+                data = b''
+                continue
             start = data.find(b'\xff\xd8')
-            end = data.find(b'\xff\xd9')
+            end   = data.find(b'\xff\xd9')
             if start != -1 and end != -1 and end > start:
                 frame = data[start:end + 2]
-                data = data[end + 2:]
+                data  = data[end + 2:]
                 yield (b'--frame\r\n'
                        b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
     finally:
@@ -168,14 +209,25 @@ def get_device():
 
 
 def log_action(action):
+    # Truncate action string to prevent oversized audit entries
     entry = AuditLog(
-        action=action,
-        ip_address=request.remote_addr,
+        action=str(action)[:50],
+        ip_address=request.remote_addr or '0.0.0.0',
         device=get_device(),
         user_id=current_user.id
     )
     db.session.add(entry)
     db.session.commit()
+
+
+# ─── Security headers helper ──────────────────────────────────────────────────
+
+def _secure_response(response):
+    response.headers['X-Frame-Options'] = 'DENY'
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
+    response.headers['Permissions-Policy'] = 'camera=(), microphone=()'
+    return response
 
 
 # ─── Public routes ────────────────────────────────────────────────────────────
@@ -186,10 +238,17 @@ def home():
 
 
 @main.route('/login', methods=['GET', 'POST'])
+@limiter.limit("20 per minute")
 def login():
     if request.method == 'POST':
         username = request.form.get('username', '').strip()
         password = request.form.get('password', '')
+
+        # Basic input size guards to prevent oversized payloads
+        if len(username) > 150 or len(password) > 256:
+            flash('Invalid credentials.', 'error')
+            return redirect(url_for('main.login'))
+
         user = User.query.filter_by(username=username).first()
 
         if user and user.check_password(password):
@@ -197,7 +256,7 @@ def login():
             login_user(user, remember=False)
             entry = AuditLog(
                 action='Login',
-                ip_address=request.remote_addr,
+                ip_address=request.remote_addr or '0.0.0.0',
                 device=get_device(),
                 user_id=user.id
             )
@@ -209,7 +268,7 @@ def login():
 
     response = make_response(render_template('login.html'))
     response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
-    return response
+    return _secure_response(response)
 
 
 # ─── Protected routes ─────────────────────────────────────────────────────────
@@ -218,7 +277,7 @@ def login():
 @login_required
 def dashboard():
     mode, source = get_camera_mode()
-    
+
     if mode == 'snapshot' and source:
         camera_online = check_camera_live(source)
     elif mode == 'rtsp' and source:
@@ -230,17 +289,18 @@ def dashboard():
     log_action('Viewed Dashboard')
 
     return render_template(
-        'dashboard.html', 
-        camera_online=camera_online, 
+        'dashboard.html',
+        camera_online=camera_online,
         camera_mode=mode,
-        camera_raw_url=source, 
-        camera_name="Live Remote Feed"
+        camera_raw_url=source,
+        camera_name=os.environ.get('CAMERA_NAME', 'Live Remote Feed')
     )
+
 
 @main.route('/camera-feed')
 @login_required
 def camera_feed():
-    """Single secure server-side mirror endpoint targeting your pipeline."""
+    """Single secure server-side mirror endpoint."""
     mode, source = get_camera_mode()
 
     if mode == 'rtsp':
@@ -259,7 +319,6 @@ def camera_feed():
 @main.route('/camera-status')
 @login_required
 def camera_status():
-    """JSON endpoint for live status polling from the dashboard."""
     mode, source = get_camera_mode()
     if mode == 'snapshot':
         online = check_camera_live(source)
@@ -271,8 +330,11 @@ def camera_status():
 @main.route('/logs')
 @login_required
 def logs():
-    all_logs = AuditLog.query.order_by(AuditLog.timestamp.desc()).all()
-    return render_template('logs.html', logs=all_logs)
+    page = request.args.get('page', 1, type=int)
+    all_logs = AuditLog.query.order_by(AuditLog.timestamp.desc()).paginate(
+        page=page, per_page=100, error_out=False
+    )
+    return render_template('logs.html', logs=all_logs.items)
 
 
 @main.route('/settings')
@@ -283,10 +345,11 @@ def settings():
 
 @main.route('/update-username', methods=['POST'])
 @login_required
+@limiter.limit("10 per minute")
 def update_username():
     new_username = request.form.get('username', '').strip()
-    if not new_username:
-        flash('Username cannot be empty.', 'error')
+    if not new_username or len(new_username) > 150:
+        flash('Username is invalid or too long.', 'error')
         return redirect(url_for('main.settings'))
 
     taken = User.query.filter_by(username=new_username).first()
@@ -303,10 +366,11 @@ def update_username():
 
 @main.route('/update-password', methods=['POST'])
 @login_required
+@limiter.limit("10 per minute")
 def update_password():
-    current_pw = request.form.get('current_password', '')
-    new_pw = request.form.get('new_password', '')
-    confirm_pw = request.form.get('confirm_password', '')
+    current_pw  = request.form.get('current_password', '')
+    new_pw      = request.form.get('new_password', '')
+    confirm_pw  = request.form.get('confirm_password', '')
 
     if not current_user.check_password(current_pw):
         flash('Current password is incorrect.', 'error')
@@ -316,8 +380,12 @@ def update_password():
         flash('New passwords do not match.', 'error')
         return redirect(url_for('main.settings'))
 
-    if len(new_pw) < 6:
-        flash('Password must be at least 6 characters.', 'error')
+    if len(new_pw) < 8:
+        flash('Password must be at least 8 characters.', 'error')
+        return redirect(url_for('main.settings'))
+
+    if len(new_pw) > 256:
+        flash('Password is too long.', 'error')
         return redirect(url_for('main.settings'))
 
     current_user.set_password(new_pw)
@@ -339,16 +407,26 @@ def logout():
 
 @main.route('/setup-database-xyz')
 def setup_database():
+    """
+    Protected setup route. Requires SECRET_KEY env var AND the route can only
+    be called when no admin user exists yet (first-run guard).
+    """
     if not os.environ.get('SECRET_KEY'):
-        return '<h1>Disabled</h1><p>Set SECRET_KEY env var to enable setup.</p>', 403
+        return '<h1>Disabled</h1>', 403
+
+    # First-run guard: once an admin exists, block this route entirely.
+    if User.query.filter_by(username='admin').first():
+        return '<h1>Already initialised</h1>', 403
+
     try:
-        db.drop_all()
-        db.create_all()
-        if not User.query.filter_by(username='admin').first():
-            admin = User(username='admin')
-            admin.set_password('admin123')
-            db.session.add(admin)
-            db.session.commit()
-        return '<h1>SUCCESS</h1><p>Database ready. Login: admin / admin123 — change password immediately.</p>'
+        db.create_all()   # removed drop_all — never nuke prod data via HTTP
+        admin = User(username='admin')
+        admin.set_password('admin123')
+        db.session.add(admin)
+        db.session.commit()
+        return ('<h1>SUCCESS</h1>'
+                '<p>Database ready. Login: admin / admin123 — '
+                '<strong>change password immediately.</strong></p>')
     except Exception as e:
-        return f'<h1>ERROR</h1><p>{str(e)}</p>'
+        logger.exception("Setup failed")
+        return '<h1>ERROR</h1><p>Check server logs.</p>', 500
