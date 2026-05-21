@@ -6,7 +6,7 @@ import logging
 from flask import (Response, stream_with_context, render_template,
                    redirect, url_for, request, flash, Blueprint,
                    make_response, session, jsonify)
-from flask_login import login_user, logout_user, login_required, current_user
+from flask_login import login_user, logout_user, login_required, logout_user, current_user
 from app.models.user import User
 from app.models.log import AuditLog
 from app import db, limiter
