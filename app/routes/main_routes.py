@@ -2,7 +2,10 @@ import os
 import re
 import subprocess
 import time
+import signal
+import threading
 import logging
+from pathlib import Path
 from flask import (
     Response,
     stream_with_context,
@@ -14,7 +17,9 @@ from flask import (
     Blueprint,
     make_response,
     session,
-    jsonify
+    jsonify,
+    send_from_directory,
+    abort
 )
 
 from flask_login import (
@@ -31,6 +36,89 @@ import requests
 
 logger = logging.getLogger(__name__)
 main = Blueprint('main', __name__)
+
+# ─────────────────────────────────────────────────────────────
+# HLS streaming state
+# ─────────────────────────────────────────────────────────────
+
+_HLS_DIR = Path("/tmp/kafkam_hls")
+_HLS_DIR.mkdir(parents=True, exist_ok=True)
+
+_hls_lock = threading.Lock()
+_hls_proc: "subprocess.Popen | None" = None
+_hls_restart_timer: "threading.Timer | None" = None
+_hls_rtsp_url: str = ""
+
+
+def _build_ffmpeg_hls_args(rtsp_url: str) -> list:
+    return [
+        "ffmpeg", "-loglevel", "warning",
+        "-rtsp_transport", "tcp",
+        "-i", rtsp_url,
+        "-c:v", "libx264", "-profile:v", "baseline", "-level", "3.1",
+        "-preset", "ultrafast", "-tune", "zerolatency",
+        "-g", "30",
+        "-c:a", "aac",
+        "-map", "0:v:0", "-map", "0:a:0?",
+        "-f", "hls",
+        "-hls_time", "2",
+        "-hls_list_size", "5",
+        "-hls_flags", "delete_segments+append_list",
+        "-hls_segment_filename", str(_HLS_DIR / "seg%05d.ts"),
+        str(_HLS_DIR / "stream.m3u8"),
+    ]
+
+
+def _hls_monitor(proc: "subprocess.Popen", rtsp_url: str) -> None:
+    """Runs in a daemon thread; restarts FFmpeg after crash."""
+    _, stderr = proc.communicate()
+    if stderr:
+        logger.warning("[HLS FFmpeg] %s", stderr.decode(errors="replace").strip())
+    logger.info("[HLS FFmpeg] process exited — restarting in 4 s")
+    _schedule_hls_restart(rtsp_url)
+
+
+def _schedule_hls_restart(rtsp_url: str) -> None:
+    global _hls_restart_timer
+    with _hls_lock:
+        if _hls_restart_timer and _hls_restart_timer.is_alive():
+            return
+        _hls_restart_timer = threading.Timer(4.0, _start_hls_proc, args=[rtsp_url])
+        _hls_restart_timer.daemon = True
+        _hls_restart_timer.start()
+
+
+def _start_hls_proc(rtsp_url: str) -> None:
+    global _hls_proc, _hls_rtsp_url
+    with _hls_lock:
+        # Don't double-spawn
+        if _hls_proc and _hls_proc.poll() is None:
+            return
+        _hls_rtsp_url = rtsp_url
+        _hls_proc = subprocess.Popen(
+            _build_ffmpeg_hls_args(rtsp_url),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+        )
+    threading.Thread(
+        target=_hls_monitor, args=[_hls_proc, rtsp_url], daemon=True
+    ).start()
+
+
+def _stop_hls_proc() -> None:
+    global _hls_proc, _hls_restart_timer, _hls_rtsp_url
+    with _hls_lock:
+        if _hls_restart_timer:
+            _hls_restart_timer.cancel()
+            _hls_restart_timer = None
+        if _hls_proc:
+            try:
+                _hls_proc.send_signal(signal.SIGINT)
+                _hls_proc.wait(timeout=5)
+            except Exception:
+                _hls_proc.kill()
+            _hls_proc = None
+        _hls_rtsp_url = ""
 
 # ─────────────────────────────────────────────────────────────
 # Allowed camera URL schemes
@@ -658,6 +746,67 @@ def logout():
     logout_user()
 
     return redirect(url_for('main.login'))
+
+
+# ─────────────────────────────────────────────────────────────
+# HLS routes
+# ─────────────────────────────────────────────────────────────
+
+@main.route('/hls/start', methods=['POST'])
+@login_required
+def hls_start():
+    """Start (or restart) the FFmpeg→HLS pipeline for the current RTSP source."""
+    _, source = get_camera_mode()
+    # Allow caller to override via JSON body
+    body = request.get_json(silent=True) or {}
+    rtsp_url = body.get('rtsp_url') or source or ''
+
+    if not rtsp_url or not _validate_camera_url(rtsp_url, 'rtsp'):
+        return jsonify({'error': 'No valid RTSP URL available'}), 400
+
+    _start_hls_proc(rtsp_url)
+
+    # Wait up to 6 s for the manifest to appear
+    manifest = _HLS_DIR / "stream.m3u8"
+    for _ in range(12):
+        if manifest.exists():
+            break
+        time.sleep(0.5)
+
+    return jsonify({
+        'status': 'started',
+        'playlist': '/hls/stream.m3u8',
+        'ready': manifest.exists(),
+    })
+
+
+@main.route('/hls/stop', methods=['POST'])
+@login_required
+def hls_stop():
+    """Kill the FFmpeg HLS process."""
+    _stop_hls_proc()
+    return jsonify({'status': 'stopped'})
+
+
+@main.route('/hls/stream.m3u8')
+@login_required
+def hls_manifest():
+    """Serve the HLS playlist file."""
+    if not (_HLS_DIR / "stream.m3u8").exists():
+        abort(503)
+    resp = send_from_directory(str(_HLS_DIR), "stream.m3u8")
+    resp.headers['Cache-Control'] = 'no-cache'
+    resp.headers['Content-Type'] = 'application/vnd.apple.mpegurl'
+    return resp
+
+
+@main.route('/hls/<path:segment>')
+@login_required
+def hls_segment(segment):
+    """Serve .ts segment files."""
+    if not segment.endswith('.ts'):
+        abort(404)
+    return send_from_directory(str(_HLS_DIR), segment)
 
 
 # ─────────────────────────────────────────────────────────────

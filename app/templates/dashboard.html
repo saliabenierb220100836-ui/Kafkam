@@ -45,11 +45,17 @@
 
                 {% if camera_online %}
 
+                {% if camera_mode == 'rtsp' %}
+                <video id="cam-hls"
+                       class="w-full h-full object-cover absolute inset-0"
+                       autoplay muted playsinline></video>
+                {% else %}
                 <img id="cam-frame"
                      src="{{ url_for('main.camera_feed') }}"
                      class="w-full h-full object-cover absolute inset-0"
                      alt="Live camera feed"
                      onerror="handleFeedError()">
+                {% endif %}
 
                 <div class="absolute top-3 left-3 z-10 flex items-center gap-2 bg-white/10 text-white text-xs px-3 py-1 rounded-sm border border-white/20">
                     <div class="w-2 h-2 bg-white rounded-full animate-pulse"></div>
@@ -122,7 +128,9 @@
 
 </div>
 
+<script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
 <script>
+    // ── Clock ────────────────────────────────────────────────
     function updateClock() {
         const el = document.getElementById('cam-time');
         if (el) {
@@ -134,6 +142,7 @@
     setInterval(updateClock, 1000);
     updateClock();
 
+    // ── MJPEG fallback error handler ─────────────────────────
     function handleFeedError() {
         const img = document.getElementById('cam-frame');
         if (img) {
@@ -142,5 +151,56 @@
             }, 3000);
         }
     }
+
+    // ── HLS player (RTSP mode only) ──────────────────────────
+    {% if camera_mode == 'rtsp' %}
+    (function () {
+        const video = document.getElementById('cam-hls');
+        const PLAYLIST = '/hls/stream.m3u8';
+
+        function startHls() {
+            fetch('/hls/start', { method: 'POST', headers: { 'Content-Type': 'application/json' } })
+                .then(r => r.json())
+                .then(data => {
+                    if (!data.ready) {
+                        // Manifest not yet ready — retry in 2 s
+                        setTimeout(attachPlayer, 2000);
+                        return;
+                    }
+                    attachPlayer();
+                })
+                .catch(() => setTimeout(startHls, 4000));
+        }
+
+        function attachPlayer() {
+            if (Hls.isSupported()) {
+                const hls = new Hls({ lowLatencyMode: true });
+                hls.loadSource(PLAYLIST);
+                hls.attachMedia(video);
+                hls.on(Hls.Events.ERROR, function (_, data) {
+                    if (data.fatal) {
+                        hls.destroy();
+                        setTimeout(startHls, 4000);
+                    }
+                });
+            } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+                // Safari native HLS
+                video.src = PLAYLIST;
+                video.addEventListener('error', () => setTimeout(startHls, 4000));
+            } else {
+                // Browser can't do HLS at all — fall back to MJPEG img
+                const img = document.createElement('img');
+                img.id = 'cam-frame';
+                img.src = "{{ url_for('main.camera_feed') }}";
+                img.className = video.className;
+                img.alt = 'Live camera feed';
+                img.onerror = handleFeedError;
+                video.replaceWith(img);
+            }
+        }
+
+        startHls();
+    })();
+    {% endif %}
 </script>
 {% endblock %}
