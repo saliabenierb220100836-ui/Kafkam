@@ -4,7 +4,153 @@
 {% block authenticated_content %}
 <div class="max-w-2xl space-y-6">
 
-    <!-- Account Information -->
+    <!-- ── Camera Source ─────────────────────────────────────────── -->
+    <div class="bg-black/50 rounded border border-white/20 shadow-2xl p-6">
+        <div class="flex items-center gap-3 mb-2">
+            <svg class="w-6 h-6 text-gray-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                <path d="M15 10l4.553-2.069A1 1 0 0 1 21 8.868V15.13a1 1 0 0 1-1.447.899L15 14"/><rect x="3" y="7" width="12" height="10" rx="2"/>
+            </svg>
+            <div>
+                <h3 class="text-base font-bold text-white tracking-widest uppercase">Camera Source</h3>
+                <p class="text-xs text-gray-500 mt-0.5">Paste your tunnel URL or RTSP stream here.</p>
+            </div>
+        </div>
+
+        <!-- Status badge -->
+        <div class="mb-5 mt-3 px-3 py-2 rounded border text-xs font-mono
+            {% if camera_mode == 'demo' %}border-yellow-700/50 bg-yellow-950/30 text-yellow-400
+            {% elif camera_mode == 'rtsp' %}border-blue-700/50 bg-blue-950/30 text-blue-400
+            {% else %}border-green-700/50 bg-green-950/30 text-green-400{% endif %}">
+            {% if camera_mode == 'demo' %}
+                ⚠ No camera configured — currently showing demo mode
+            {% elif camera_mode == 'rtsp' %}
+                ✓ RTSP stream active: {{ camera_source }}
+            {% else %}
+                ✓ HTTP stream active: {{ camera_source }}
+            {% endif %}
+        </div>
+
+        <!-- How-to hint -->
+        <details class="mb-5 group">
+            <summary class="cursor-pointer text-xs text-gray-500 hover:text-gray-300 tracking-wide uppercase select-none">
+                ▶ How to get a tunnel URL (click to expand)
+            </summary>
+            <div class="mt-3 space-y-3 text-xs text-gray-400 bg-black/40 rounded p-4 border border-white/10 leading-relaxed">
+                <p class="text-white font-semibold">Why is this needed?</p>
+                <p>Railway is a cloud server. It <span class="text-red-400">cannot reach 192.168.x.x</span> — those are private IPs on your home network. You need a <span class="text-green-400">tunnel</span> that bridges your home camera to a public internet URL.</p>
+
+                <p class="text-white font-semibold mt-2">📱 Phone Cam (DroidCam / IP Webcam)</p>
+                <ol class="list-decimal list-inside space-y-1 ml-2">
+                    <li>Install <span class="text-white">IP Webcam</span> (Android) or <span class="text-white">DroidCam</span> on your phone</li>
+                    <li>Start the server — it shows a local IP like <code class="text-yellow-300">192.168.1.50:8080</code></li>
+                    <li>On a PC on the same Wi-Fi, open a terminal and run:<br>
+                        <code class="text-green-300 block mt-1 ml-4">npx bore local 8080 --to bore.pub</code>
+                        <span class="text-gray-500 ml-4">(free, no account needed)</span>
+                    </li>
+                    <li>It gives you a URL like <code class="text-yellow-300">http://bore.pub:XXXXX</code></li>
+                    <li>For IP Webcam paste: <code class="text-white">http://bore.pub:XXXXX/video</code><br>
+                        For DroidCam paste: <code class="text-white">http://bore.pub:XXXXX/video</code>
+                    </li>
+                </ol>
+
+                <p class="text-white font-semibold mt-2">📷 CCTV / NVR via RTSP</p>
+                <ol class="list-decimal list-inside space-y-1 ml-2">
+                    <li>Log into your router admin page</li>
+                    <li>Port-forward external port <code class="text-white">554</code> → your camera's local IP port <code class="text-white">554</code></li>
+                    <li>Find your public IP at <span class="text-white">whatismyip.com</span></li>
+                    <li>Paste the RTSP URL below, e.g.:<br>
+                        <code class="text-green-300 block mt-1 ml-4">rtsp://admin:password@YOUR_PUBLIC_IP:554/stream1</code>
+                    </li>
+                </ol>
+
+                <p class="text-gray-600 mt-2">Tip: Tunnels like bore.pub give a new URL each time. For a permanent URL use <span class="text-gray-400">ngrok</span> (free tier) or <span class="text-gray-400">Cloudflare Tunnel</span>.</p>
+            </div>
+        </details>
+
+        <form method="POST" action="{{ url_for('main.update_camera') }}" class="space-y-4">
+
+            <!-- Source type toggle -->
+            <div>
+                <label class="block text-xs font-medium text-gray-400 mb-2 tracking-widest uppercase">Stream Type</label>
+                <div class="flex gap-2">
+                    <label class="flex-1 cursor-pointer">
+                        <input type="radio" name="source_type" value="http" class="sr-only peer"
+                               {% if camera_mode != 'rtsp' %}checked{% endif %}>
+                        <div class="peer-checked:bg-white/20 peer-checked:border-white/60 border border-white/20 rounded px-4 py-2.5 text-center text-xs text-gray-400 peer-checked:text-white transition-all uppercase tracking-wider">
+                            📱 HTTP / Phone Cam
+                        </div>
+                    </label>
+                    <label class="flex-1 cursor-pointer">
+                        <input type="radio" name="source_type" value="rtsp" class="sr-only peer"
+                               {% if camera_mode == 'rtsp' %}checked{% endif %}>
+                        <div class="peer-checked:bg-white/20 peer-checked:border-white/60 border border-white/20 rounded px-4 py-2.5 text-center text-xs text-gray-400 peer-checked:text-white transition-all uppercase tracking-wider">
+                            📷 RTSP / CCTV
+                        </div>
+                    </label>
+                </div>
+            </div>
+
+            <!-- HTTP URL -->
+            <div id="http-fields">
+                <label class="block text-xs font-medium text-gray-400 mb-2 tracking-widest uppercase">
+                    Camera HTTP URL <span class="text-gray-600 normal-case">(tunnel URL + /video)</span>
+                </label>
+                <input type="url" name="camera_url"
+                       placeholder="http://bore.pub:XXXXX/video"
+                       value="{{ camera_source if camera_mode == 'snapshot' else '' }}"
+                       class="w-full px-4 py-3 bg-black/50 border border-white/20 text-white rounded
+                              focus:outline-none focus:ring-1 focus:ring-white/50
+                              placeholder:text-gray-600 text-sm font-mono">
+                <p class="text-xs text-gray-600 mt-1">Supports IP Webcam, DroidCam, or any MJPEG/JPEG HTTP stream</p>
+            </div>
+
+            <!-- RTSP URL -->
+            <div id="rtsp-fields" class="hidden">
+                <label class="block text-xs font-medium text-gray-400 mb-2 tracking-widest uppercase">
+                    RTSP URL
+                </label>
+                <input type="text" name="camera_rtsp_url"
+                       placeholder="rtsp://admin:password@YOUR_PUBLIC_IP:554/stream1"
+                       value="{{ camera_source if camera_mode == 'rtsp' else '' }}"
+                       class="w-full px-4 py-3 bg-black/50 border border-white/20 text-white rounded
+                              focus:outline-none focus:ring-1 focus:ring-white/50
+                              placeholder:text-gray-600 text-sm font-mono">
+                <p class="text-xs text-gray-600 mt-1">Requires port 554 forwarded on your router</p>
+            </div>
+
+            <!-- Camera Name -->
+            <div>
+                <label class="block text-xs font-medium text-gray-400 mb-2 tracking-widest uppercase">Display Name</label>
+                <input type="text" name="camera_name"
+                       placeholder="e.g. Front Door, Living Room"
+                       value="{{ camera_name }}"
+                       class="w-full px-4 py-3 bg-black/50 border border-white/20 text-white rounded
+                              focus:outline-none focus:ring-1 focus:ring-white/50
+                              placeholder:text-gray-600 text-sm">
+            </div>
+
+            <div class="flex gap-3">
+                <button type="submit"
+                        class="flex-1 bg-white/10 text-white py-3 rounded hover:bg-white/20 transition-colors
+                               font-medium tracking-widest uppercase text-sm border border-white/20 flex items-center justify-center gap-2">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                        <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
+                        <polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/>
+                    </svg>
+                    Save Camera
+                </button>
+            </div>
+        </form>
+
+        <form method="POST" action="{{ url_for('main.clear_camera') }}" class="mt-2">
+            <button type="submit"
+                    class="w-full py-2 rounded border border-red-900/50 text-red-500 hover:bg-red-950/30 transition-colors text-xs tracking-widest uppercase">
+                Clear / Reset to Demo Mode
+            </button>
+        </form>
+    </div>
+
+    <!-- ── Account Information ────────────────────────────────────── -->
     <div class="bg-black/50 rounded border border-white/20 shadow-2xl p-6">
         <div class="flex items-center gap-3 mb-6">
             <svg class="w-6 h-6 text-gray-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
@@ -16,29 +162,26 @@
                 <p class="text-xs text-gray-500 mt-0.5">Update your username.</p>
             </div>
         </div>
-
         <form method="POST" action="{{ url_for('main.update_username') }}" class="space-y-4">
             <div>
                 <label class="block text-xs font-medium text-gray-400 mb-2 tracking-widest uppercase">Username</label>
                 <input type="text" name="username" value="{{ current_user.username }}" required
                        class="w-full px-4 py-3 bg-black/50 border border-white/20 text-white rounded
-                              focus:outline-none focus:ring-1 focus:ring-white/50 focus:border-transparent
-                              text-sm">
+                              focus:outline-none focus:ring-1 focus:ring-white/50 focus:border-transparent text-sm">
             </div>
             <button type="submit"
                     class="w-full bg-white/10 text-white py-3 rounded hover:bg-white/20 transition-colors
                            font-medium tracking-widest uppercase text-sm border border-white/20 flex items-center justify-center gap-2">
                 <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
                     <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
-                    <polyline points="17 21 17 13 7 13 7 21"/>
-                    <polyline points="7 3 7 8 15 8"/>
+                    <polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/>
                 </svg>
                 Save Username
             </button>
         </form>
     </div>
 
-    <!-- Change Password -->
+    <!-- ── Change Password ───────────────────────────────────────── -->
     <div class="bg-black/50 rounded border border-white/20 shadow-2xl p-6">
         <div class="flex items-center gap-3 mb-6">
             <svg class="w-6 h-6 text-gray-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
@@ -50,36 +193,31 @@
                 <p class="text-xs text-gray-500 mt-0.5">Keep your account secure.</p>
             </div>
         </div>
-
         <form method="POST" action="{{ url_for('main.update_password') }}" class="space-y-4">
             <div>
                 <label class="block text-xs font-medium text-gray-400 mb-2 tracking-widest uppercase">Current Password</label>
                 <input type="password" name="current_password" placeholder="Enter current password" required
                        class="w-full px-4 py-3 bg-black/50 border border-white/20 text-white rounded
-                              focus:outline-none focus:ring-1 focus:ring-white/50 focus:border-transparent
-                              placeholder:text-gray-600 text-sm">
+                              focus:outline-none focus:ring-1 focus:ring-white/50 placeholder:text-gray-600 text-sm">
             </div>
             <div>
                 <label class="block text-xs font-medium text-gray-400 mb-2 tracking-widest uppercase">New Password</label>
                 <input type="password" name="new_password" placeholder="Enter new password" required
                        class="w-full px-4 py-3 bg-black/50 border border-white/20 text-white rounded
-                              focus:outline-none focus:ring-1 focus:ring-white/50 focus:border-transparent
-                              placeholder:text-gray-600 text-sm">
+                              focus:outline-none focus:ring-1 focus:ring-white/50 placeholder:text-gray-600 text-sm">
             </div>
             <div>
                 <label class="block text-xs font-medium text-gray-400 mb-2 tracking-widest uppercase">Confirm New Password</label>
                 <input type="password" name="confirm_password" placeholder="Confirm new password" required
                        class="w-full px-4 py-3 bg-black/50 border border-white/20 text-white rounded
-                              focus:outline-none focus:ring-1 focus:ring-white/50 focus:border-transparent
-                              placeholder:text-gray-600 text-sm">
+                              focus:outline-none focus:ring-1 focus:ring-white/50 placeholder:text-gray-600 text-sm">
             </div>
             <button type="submit"
                     class="w-full bg-white/10 text-white py-3 rounded hover:bg-white/20 transition-colors
                            font-medium tracking-widest uppercase text-sm border border-white/20 flex items-center justify-center gap-2">
                 <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
                     <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
-                    <polyline points="17 21 17 13 7 13 7 21"/>
-                    <polyline points="7 3 7 8 15 8"/>
+                    <polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/>
                 </svg>
                 Update Password
             </button>
@@ -87,4 +225,19 @@
     </div>
 
 </div>
+
+<script>
+    const radios = document.querySelectorAll('input[name="source_type"]');
+    const httpFields = document.getElementById('http-fields');
+    const rtspFields = document.getElementById('rtsp-fields');
+
+    function toggleFields() {
+        const val = document.querySelector('input[name="source_type"]:checked').value;
+        httpFields.classList.toggle('hidden', val !== 'http');
+        rtspFields.classList.toggle('hidden', val !== 'rtsp');
+    }
+
+    radios.forEach(r => r.addEventListener('change', toggleFields));
+    toggleFields();
+</script>
 {% endblock %}

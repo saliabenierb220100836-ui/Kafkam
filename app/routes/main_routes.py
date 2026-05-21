@@ -32,8 +32,22 @@ def _validate_camera_url(url: str, mode: str) -> bool:
 
 # ─── Camera source resolution ─────────────────────────────────────────────────
 def get_camera_mode():
-    rtsp = os.environ.get('CAMERA_RTSP_URL', '').strip()
-    snap = os.environ.get('CAMERA_URL', '').strip()
+    # DB config takes priority over env vars so the Settings page works
+    try:
+        from app.models.camera_config import CameraConfig
+        cfg = CameraConfig.get()
+        rtsp = (cfg.camera_rtsp_url or '').strip()
+        snap = (cfg.camera_url or '').strip()
+    except Exception:
+        rtsp = ''
+        snap = ''
+
+    # Fall back to env vars if DB has nothing
+    if not rtsp:
+        rtsp = os.environ.get('CAMERA_RTSP_URL', '').strip()
+    if not snap:
+        snap = os.environ.get('CAMERA_URL', '').strip()
+
     mode = os.environ.get('CAMERA_MODE', '').strip().lower()
 
     if mode == 'mjpeg' and snap and _validate_camera_url(snap, 'snapshot'):
@@ -43,6 +57,17 @@ def get_camera_mode():
     if snap and _validate_camera_url(snap, 'snapshot'):
         return 'snapshot', snap
     return 'demo', None
+
+
+def get_camera_name():
+    try:
+        from app.models.camera_config import CameraConfig
+        cfg = CameraConfig.get()
+        if cfg.camera_name:
+            return cfg.camera_name
+    except Exception:
+        pass
+    return os.environ.get('CAMERA_NAME', 'Live Remote Feed')
 
 
 def check_camera_live(camera_url, timeout=3):
@@ -293,7 +318,7 @@ def dashboard():
         camera_online=camera_online,
         camera_mode=mode,
         camera_raw_url=source,
-        camera_name=os.environ.get('CAMERA_NAME', 'Live Remote Feed')
+        camera_name=get_camera_name()
     )
 
 
@@ -340,7 +365,11 @@ def logs():
 @main.route('/settings')
 @login_required
 def settings():
-    return render_template('settings.html')
+    mode, source = get_camera_mode()
+    return render_template('settings.html',
+                           camera_mode=mode,
+                           camera_source=source or '',
+                           camera_name=get_camera_name())
 
 
 @main.route('/update-username', methods=['POST'])
@@ -395,7 +424,53 @@ def update_password():
     return redirect(url_for('main.settings'))
 
 
-@main.route('/logout')
+@main.route('/update-camera', methods=['POST'])
+@login_required
+@limiter.limit("20 per minute")
+def update_camera():
+    from app.models.camera_config import CameraConfig
+
+    source_type  = request.form.get('source_type', 'http').strip()
+    camera_url   = request.form.get('camera_url', '').strip()
+    camera_rtsp  = request.form.get('camera_rtsp_url', '').strip()
+    camera_name  = request.form.get('camera_name', '').strip()[:100]
+
+    # Validate URLs
+    if camera_url and not _validate_camera_url(camera_url, 'snapshot'):
+        flash('Camera URL must start with http:// or https://', 'error')
+        return redirect(url_for('main.settings'))
+    if camera_rtsp and not _validate_camera_url(camera_rtsp, 'rtsp'):
+        flash('RTSP URL must start with rtsp://', 'error')
+        return redirect(url_for('main.settings'))
+
+    cfg = CameraConfig.get()
+    if source_type == 'rtsp':
+        cfg.camera_rtsp_url = camera_rtsp or None
+        cfg.camera_url = None
+    else:
+        cfg.camera_url = camera_url or None
+        cfg.camera_rtsp_url = None
+    cfg.camera_name = camera_name or 'Live Remote Feed'
+    db.session.commit()
+    log_action('Updated Camera Config')
+    flash('Camera source updated.', 'success')
+    return redirect(url_for('main.settings'))
+
+
+@main.route('/clear-camera', methods=['POST'])
+@login_required
+def clear_camera():
+    from app.models.camera_config import CameraConfig
+    cfg = CameraConfig.get()
+    cfg.camera_url = None
+    cfg.camera_rtsp_url = None
+    db.session.commit()
+    log_action('Cleared Camera Config')
+    flash('Camera source cleared. Now showing demo mode.', 'success')
+    return redirect(url_for('main.settings'))
+
+
+
 @login_required
 def logout():
     log_action('Logout')

@@ -33,6 +33,7 @@ def create_app():
     with app.app_context():
         from app.models.user import User
         from app.models.log import AuditLog
+        from app.models.camera_config import CameraConfig
         db.create_all()
 
     @app.after_request
