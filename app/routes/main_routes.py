@@ -1,6 +1,4 @@
 import os
-import urllib.request
-import urllib.error
 import subprocess
 import threading
 import time
@@ -11,18 +9,18 @@ from flask_login import login_user, logout_user, login_required, current_user
 from app.models.user import User
 from app.models.log import AuditLog
 from app import db
+import requests
 
 main = Blueprint('main', __name__)
 
 # ─── Camera source resolution ─────────────────────────────────────────────────
-# Priority:
-#   1. CAMERA_RTSP_URL  → ffmpeg RTSP → MJPEG  (real CCTV / Hikvision / Dahua)
-#   2. CAMERA_URL       → HTTP snapshot refresh  (phone IP Webcam app, basic cams)
-#   3. Neither set      → demo mode (animated test pattern via ffmpeg)
-
 def get_camera_mode():
     rtsp = os.environ.get('CAMERA_RTSP_URL', '').strip()
     snap = os.environ.get('CAMERA_URL', '').strip()
+    mode = os.environ.get('CAMERA_MODE', '').strip().lower()
+    
+    if mode == 'mjpeg' and snap:
+        return 'snapshot', snap
     if rtsp:
         return 'rtsp', rtsp
     if snap:
@@ -34,12 +32,14 @@ def check_camera_live(camera_url, timeout=3):
     if not camera_url:
         return False
     try:
-        req = urllib.request.Request(camera_url, headers={
-            'User-Agent': 'Mozilla/5.0',
-            'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8'
-        })
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            return r.status == 200
+        # Inject bypass headers so LocalTunnel skips the IP verification landing screen
+        headers = {
+            "Bypass-Tunnel-Reminder": "true",
+            "User-Agent": "KafkamCCTV/1.0",
+            "Accept": "image/webp,image/apng,image/*,*/*;q=0.8"
+        }
+        response = requests.get(camera_url, headers=headers, timeout=timeout, stream=True)
+        return response.status_code == 200
     except Exception:
         return False
 
@@ -80,33 +80,38 @@ def _generate_rtsp(rtsp_url):
 
 
 def _generate_snapshot(snapshot_url):
-    """Poll an HTTP snapshot URL and emit MJPEG multipart frames.
-
-    Compatible with:
-      - Android IP Webcam app  → http://<phone_ip>:8080/shot.jpg
-      - TP-Link / Reolink      → http://<cam_ip>/snapshot.jpg
-      - Any camera with a JPEG snapshot endpoint
-    """
-    while True:
+    """Poll an HTTP snapshot URL/Stream and emit MJPEG multipart frames."""
+    headers = {
+        "Bypass-Tunnel-Reminder": "true",
+        "User-Agent": "KafkamCCTV/1.0"
+    }
+    
+    # Check if we are pointing directly to an MJPEG streaming endpoint (/video)
+    if snapshot_url.endswith('/video'):
         try:
-            req = urllib.request.Request(snapshot_url, headers={
-                'User-Agent': 'Mozilla/5.0'
-            })
-            with urllib.request.urlopen(req, timeout=5) as r:
-                frame = r.read()
-            yield (b'--frame\r\n'
-                   b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
+            # Stream directly from the proxy tunnel to save processing overhead
+            with requests.get(snapshot_url, headers=headers, stream=True, timeout=10) as r:
+                for chunk in r.iter_content(chunk_size=4096):
+                    if chunk:
+                        yield chunk
         except Exception:
-            pass
-        time.sleep(0.1)  # ~10 fps
+            time.sleep(1)
+    else:
+        # Fallback to standard snapshot frame-by-frame polling loop
+        while True:
+            try:
+                response = requests.get(snapshot_url, headers=headers, timeout=5)
+                if response.status_code == 200:
+                    frame = response.content
+                    yield (b'--frame\r\n'
+                           b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
+            except Exception:
+                pass
+            time.sleep(0.1)  # ~10 fps
 
 
 def _generate_demo():
-    """Generate a live demo test pattern via ffmpeg (no hardware needed).
-
-    Produces an animated colour-bar + timestamp overlay so the dashboard
-    looks alive while you wait for real hardware.
-    """
+    """Generate a live demo test pattern via ffmpeg (no hardware needed)."""
     cmd = [
         'ffmpeg',
         '-f', 'lavfi',
@@ -219,10 +224,8 @@ def dashboard():
     if mode == 'snapshot':
         camera_online = check_camera_live(source)
     elif mode == 'rtsp':
-        # Assume online if URL is configured — ffmpeg will handle errors
         camera_online = True
     else:
-        # Demo mode — always "online"
         camera_online = True
 
     camera_name = os.environ.get('CAMERA_NAME', 'Main Entrance')
@@ -263,7 +266,7 @@ def camera_status():
     if mode == 'snapshot':
         online = check_camera_live(source)
     else:
-        online = True  # rtsp and demo are assumed online
+        online = True
     return jsonify({'online': online, 'mode': mode})
 
 
@@ -334,12 +337,10 @@ def logout():
     return redirect(url_for('main.login'))
 
 
-# ─── One-time setup (remove after first deploy) ───────────────────────────────
+# ─── One-time setup ───────────────────────────────────────────────────────────
 
 @main.route('/setup-database-xyz')
 def setup_database():
-    # Guard: only allow if SECRET_KEY env var is explicitly set to avoid
-    # accidental exposure in production. Remove this route entirely after setup.
     if not os.environ.get('SECRET_KEY'):
         return '<h1>Disabled</h1><p>Set SECRET_KEY env var to enable setup.</p>', 403
     try:
