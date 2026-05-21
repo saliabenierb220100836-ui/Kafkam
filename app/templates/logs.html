@@ -1,0 +1,123 @@
+{% extends "layout.html" %}
+{% block title %}Activity Logs{% endblock %}
+
+{% block authenticated_content %}
+<div class="space-y-4">
+
+    <!-- Search + Filter -->
+    <div class="flex flex-col sm:flex-row gap-3">
+        <div class="flex-1 relative">
+            <svg class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+            </svg>
+            <input id="search-input" type="text" placeholder="SEARCH SECURITY LOGS..."
+                   class="w-full pl-9 pr-4 py-3 bg-black/50 border border-white/20 text-white rounded
+                          focus:outline-none focus:ring-1 focus:ring-white/50 focus:border-transparent
+                          placeholder:text-gray-600 text-sm tracking-wide"
+                   oninput="filterLogs()">
+        </div>
+        <div class="flex items-center gap-2">
+            <svg class="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/>
+            </svg>
+            <select id="action-filter"
+                    class="px-4 py-3 bg-black/50 border border-white/20 text-white rounded
+                           focus:outline-none focus:ring-1 focus:ring-white/50 text-sm tracking-wider uppercase"
+                    onchange="filterLogs()">
+                <option value="All">All Actions</option>
+                <option value="Login">Login</option>
+                <option value="Logout">Logout</option>
+                <option value="Changed Username">Changed Username</option>
+                <option value="Changed Password">Changed Password</option>
+            </select>
+        </div>
+    </div>
+
+    <!-- Table -->
+    <div class="bg-black/50 rounded border border-white/20 overflow-hidden shadow-2xl">
+        <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+                <thead>
+                    <tr class="bg-white/5 border-b border-white/10 text-[11px] uppercase tracking-widest text-gray-400">
+                        <th class="px-6 py-4 text-left font-semibold">Device</th>
+                        <th class="px-6 py-4 text-left font-semibold">Action</th>
+                        <th class="px-6 py-4 text-left font-semibold">Timestamp</th>
+                        <th class="px-6 py-4 text-left font-semibold">IP Address</th>
+                    </tr>
+                </thead>
+                <tbody id="logs-body" class="divide-y divide-white/5">
+                    {% for log in logs %}
+                    <tr class="log-row hover:bg-white/5 transition-colors"
+                        data-device="{{ log.device }}"
+                        data-action="{{ log.action }}"
+                        data-ip="{{ log.ip_address }}">
+                        <td class="px-6 py-4 font-medium text-white">{{ log.device }}</td>
+                        <td class="px-6 py-4">
+                            {% if log.action == 'Login' %}
+                            <span class="inline-flex items-center gap-1.5 px-3 py-1 rounded text-xs bg-green-950/50 text-green-400 border border-green-700/50 font-medium">
+                                <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg>
+                                Login
+                            </span>
+                            {% elif log.action == 'Logout' %}
+                            <span class="inline-flex items-center gap-1.5 px-3 py-1 rounded text-xs bg-orange-950/50 text-orange-400 border border-orange-700/50 font-medium">
+                                <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+                                Logout
+                            </span>
+                            {% elif log.action == 'Changed Username' %}
+                            <span class="inline-flex items-center gap-1.5 px-3 py-1 rounded text-xs bg-blue-950/50 text-blue-400 border border-blue-700/50 font-medium">
+                                <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                                Changed Username
+                            </span>
+                            {% elif log.action == 'Changed Password' %}
+                            <span class="inline-flex items-center gap-1.5 px-3 py-1 rounded text-xs bg-purple-950/50 text-purple-400 border border-purple-700/50 font-medium">
+                                <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                                Changed Password
+                            </span>
+                            {% else %}
+                            <span class="inline-flex items-center gap-1.5 px-3 py-1 rounded text-xs bg-white/5 text-gray-400 border border-white/10 font-medium">
+                                {{ log.action }}
+                            </span>
+                            {% endif %}
+                        </td>
+                        <td class="px-6 py-4 text-gray-400 font-mono text-xs">{{ log.timestamp.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+                        <td class="px-6 py-4 text-gray-500 font-mono text-xs">{{ log.ip_address }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Count -->
+    <p id="log-count" class="text-xs text-gray-500 tracking-widest uppercase"></p>
+</div>
+
+<script>
+    function filterLogs() {
+        const search = document.getElementById('search-input').value.toLowerCase();
+        const action = document.getElementById('action-filter').value;
+        const rows = document.querySelectorAll('.log-row');
+        let visible = 0;
+
+        rows.forEach(row => {
+            const device = row.dataset.device.toLowerCase();
+            const rowAction = row.dataset.action;
+            const ip = row.dataset.ip.toLowerCase();
+            const matchSearch = device.includes(search) || ip.includes(search);
+            const matchAction = action === 'All' || rowAction === action;
+
+            if (matchSearch && matchAction) {
+                row.style.display = '';
+                visible++;
+            } else {
+                row.style.display = 'none';
+            }
+        });
+
+        document.getElementById('log-count').textContent =
+            `Showing ${visible} of ${rows.length} entries`;
+    }
+
+    filterLogs();
+</script>
+{% endblock %}

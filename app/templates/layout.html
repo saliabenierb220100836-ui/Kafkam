@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>KAFKAM — {% block title %}{% endblock %}</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-black text-white {% block body_class %}{% endblock %}">
+
+{% if current_user.is_authenticated %}
+<div class="flex h-screen bg-black overflow-hidden">
+
+    <!-- Sidebar -->
+    <aside class="w-64 bg-black border-r border-white/10 flex flex-col flex-shrink-0">
+
+        <!-- Brand -->
+        <div class="p-6 border-b border-white/10">
+            <h1 class="text-xl font-bold text-white tracking-wider">KAFKAM</h1>
+            <p class="text-xs text-gray-500 mt-1 tracking-widest uppercase">Camera System</p>
+        </div>
+
+        <!-- Navigation -->
+        <nav class="flex-1 p-4 space-y-2">
+            <a href="{{ url_for('main.dashboard') }}"
+               class="flex items-center gap-3 px-4 py-3 rounded transition-colors text-sm font-medium tracking-wide
+                      {{ 'bg-white/10 text-white border border-white/20' if request.endpoint == 'main.dashboard'
+                         else 'text-gray-400 hover:bg-white/5 hover:text-white' }}">
+                <!-- Camera icon -->
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                    <path d="M23 7l-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>
+                </svg>
+                Main Feed
+            </a>
+            <a href="{{ url_for('main.logs') }}"
+               class="flex items-center gap-3 px-4 py-3 rounded transition-colors text-sm font-medium tracking-wide
+                      {{ 'bg-white/10 text-white border border-white/20' if request.endpoint == 'main.logs'
+                         else 'text-gray-400 hover:bg-white/5 hover:text-white' }}">
+                <!-- Logs icon -->
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                    <path d="M4 6h16M4 12h16M4 18h16"/>
+                </svg>
+                Activity Logs
+            </a>
+            <a href="{{ url_for('main.settings') }}"
+               class="flex items-center gap-3 px-4 py-3 rounded transition-colors text-sm font-medium tracking-wide
+                      {{ 'bg-white/10 text-white border border-white/20' if request.endpoint == 'main.settings'
+                         else 'text-gray-400 hover:bg-white/5 hover:text-white' }}">
+                <!-- Settings icon -->
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                    <circle cx="12" cy="12" r="3"/>
+                    <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+                </svg>
+                Settings
+            </a>
+        </nav>
+
+        <!-- User + Logout -->
+        <div class="p-4 border-t border-white/10">
+            <a href="{{ url_for('main.logout') }}"
+               class="flex items-center gap-3 px-4 py-3 rounded transition-colors text-sm font-medium tracking-wide text-gray-400 hover:bg-white/5 hover:text-white">
+                <!-- Logout icon -->
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                    <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
+                    <polyline points="16 17 21 12 16 7"/>
+                    <line x1="21" y1="12" x2="9" y2="12"/>
+                </svg>
+                End Shift
+            </a>
+        </div>
+    </aside>
+
+    <!-- Main content -->
+    <main class="flex-1 flex flex-col overflow-hidden">
+        <!-- Top bar -->
+        <header class="bg-black border-b border-white/10 px-8 py-4 flex items-center justify-between flex-shrink-0">
+            <h2 class="text-xl font-bold text-white tracking-wider">{{ self.title() }}</h2>
+            <span class="text-xs text-gray-500 tracking-widest uppercase">Philippine Standard Time (PHT)</span>
+        </header>
+
+        <!-- Page content -->
+        <div class="flex-1 overflow-auto p-8">
+            {% with messages = get_flashed_messages(with_categories=true) %}
+                {% if messages %}
+                    <div class="mb-6 space-y-2">
+                        {% for category, message in messages %}
+                            <div class="px-4 py-3 rounded border text-sm font-medium
+                                {{ 'bg-green-950/50 border-green-700/50 text-green-400' if category == 'success'
+                                   else 'bg-red-950/50 border-red-700/50 text-red-400' }}">
+                                {{ message }}
+                            </div>
+                        {% endfor %}
+                    </div>
+                {% endif %}
+            {% endwith %}
+            {% block authenticated_content %}{% endblock %}
+        </div>
+    </main>
+</div>
+
+{% else %}
+<!-- Unauthenticated layout -->
+<div class="min-h-screen flex items-center justify-center">
+    {% block unauthenticated_content %}{% endblock %}
+</div>
+{% endif %}
+
+</body>
+</html>

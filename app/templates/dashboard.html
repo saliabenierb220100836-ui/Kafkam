@@ -1,0 +1,172 @@
+{% extends "layout.html" %}
+{% block title %}Main Feed{% endblock %}
+
+{% block authenticated_content %}
+<div class="space-y-6">
+
+    <!-- Top bar -->
+    <div class="flex items-center justify-between">
+        <p class="text-sm text-gray-400 tracking-wider uppercase">
+            {% if camera_online %}
+                Monitoring <span class="text-white font-bold">1</span> Active Camera
+            {% else %}
+                <span class="text-red-400">Camera Offline</span>
+            {% endif %}
+        </p>
+        <div class="flex items-center gap-3">
+            <!-- Mode badge -->
+            {% if camera_mode == 'demo' %}
+            <span class="text-xs text-yellow-400 bg-yellow-950/50 px-3 py-1.5 rounded border border-yellow-700/50 tracking-wide font-medium uppercase">
+                Demo Mode
+            </span>
+            {% elif camera_mode == 'rtsp' %}
+            <span class="text-xs text-blue-400 bg-blue-950/50 px-3 py-1.5 rounded border border-blue-700/50 tracking-wide font-medium uppercase">
+                RTSP
+            </span>
+            {% elif camera_mode == 'snapshot' %}
+            <span class="text-xs text-purple-400 bg-purple-950/50 px-3 py-1.5 rounded border border-purple-700/50 tracking-wide font-medium uppercase">
+                HTTP Snapshot
+            </span>
+            {% endif %}
+
+            {% if camera_online %}
+            <div class="flex items-center gap-2 bg-black/50 px-3 py-2 rounded border border-white/10">
+                <div class="w-2.5 h-2.5 bg-white rounded-full animate-pulse"></div>
+                <span class="text-xs text-white tracking-widest uppercase font-medium">Recording</span>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Camera card -->
+    <div class="w-full max-w-5xl mx-auto">
+        <div class="bg-black/50 rounded border border-white/20 overflow-hidden shadow-2xl">
+
+            <!-- Feed -->
+            <div class="bg-black aspect-video relative flex items-center justify-center border-b border-white/10">
+
+                {% if camera_online %}
+
+                <!-- MJPEG live feed — works for RTSP, snapshot, and demo modes -->
+                <img id="cam-frame"
+                     src="{{ url_for('main.camera_feed') }}"
+                     class="w-full h-full object-cover absolute inset-0"
+                     alt="Live camera feed"
+                     onerror="handleFeedError()">
+
+                <!-- REC badge -->
+                <div class="absolute top-3 left-3 z-10 flex items-center gap-2 bg-white/10 text-white text-xs px-3 py-1 rounded-sm border border-white/20">
+                    <div class="w-2 h-2 bg-white rounded-full animate-pulse"></div>
+                    {% if camera_mode == 'demo' %}DEMO{% else %}REC{% endif %}
+                </div>
+
+                <!-- Timestamp overlay -->
+                <div class="absolute top-3 right-3 z-10 text-gray-400 text-xs font-mono" id="cam-time"></div>
+
+                <!-- Mode hint for demo -->
+                {% if camera_mode == 'demo' %}
+                <div class="absolute bottom-12 left-0 right-0 flex justify-center z-10">
+                    <span class="text-yellow-400/80 text-xs bg-black/60 px-4 py-1.5 rounded border border-yellow-900/50 tracking-wide">
+                        No camera configured — set CAMERA_RTSP_URL or CAMERA_URL in Railway env vars
+                    </span>
+                </div>
+                {% endif %}
+
+                {% else %}
+
+                <!-- Offline state -->
+                <div class="text-center">
+                    <svg class="mx-auto text-white/20 mb-3" width="48" height="48" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                        <line x1="2" y1="2" x2="22" y2="22"/>
+                        <path d="M18.364 5.636a9 9 0 0 1 0 12.728"/>
+                        <path d="M15.536 8.464a5 5 0 0 1 0 7.072"/>
+                        <path d="M12.707 11.293a1.5 1.5 0 0 1 0 2.121"/>
+                    </svg>
+                    <p class="text-gray-400 text-sm uppercase tracking-wider">Connection Lost</p>
+                    <p class="text-gray-600 text-xs mt-1">Check that CAMERA_URL is reachable</p>
+                    <button onclick="location.reload()"
+                            class="mt-4 text-xs text-gray-500 hover:text-white border border-white/10 px-4 py-2 rounded transition-colors uppercase tracking-wider">
+                        Retry
+                    </button>
+                </div>
+
+                {% endif %}
+            </div>
+
+            <!-- Camera info footer -->
+            <div class="p-4 bg-black/70 border-t border-white/10 flex items-center justify-between">
+                <div>
+                    <h3 class="font-semibold text-white tracking-wider text-sm">{{ camera_name }}</h3>
+                    <p class="text-xs text-gray-500 mt-0.5">
+                        {% if camera_mode == 'rtsp' %}RTSP stream via ffmpeg
+                        {% elif camera_mode == 'snapshot' %}HTTP snapshot refresh
+                        {% else %}Demo — no hardware connected
+                        {% endif %}
+                    </p>
+                </div>
+
+                {% if camera_online %}
+                <span class="flex items-center gap-1.5 text-xs text-green-400 bg-green-950/50 px-3 py-1.5 rounded border border-green-700/50 tracking-wide font-medium">
+                    <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                        <path d="M5 12.55a11 11 0 0 1 14.08 0"/>
+                        <path d="M1.42 9a16 16 0 0 1 21.16 0"/>
+                        <path d="M8.53 16.11a6 6 0 0 1 6.95 0"/>
+                        <line x1="12" y1="20" x2="12.01" y2="20"/>
+                    </svg>
+                    Online
+                </span>
+                {% else %}
+                <span class="flex items-center gap-1.5 text-xs text-gray-400 bg-black/50 px-3 py-1.5 rounded border border-white/10 tracking-wide font-medium">
+                    Offline
+                </span>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <!-- Setup guide (only shown in demo mode) -->
+    {% if camera_mode == 'demo' %}
+    <div class="w-full max-w-5xl mx-auto bg-yellow-950/20 border border-yellow-800/30 rounded p-5 space-y-3">
+        <p class="text-yellow-300 text-sm font-medium tracking-wide uppercase">How to connect a real camera</p>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs text-gray-400 leading-relaxed">
+            <div class="space-y-1">
+                <p class="text-white text-xs font-medium mb-1">Option A — CCTV / IP Camera (RTSP)</p>
+                <p>Set <code class="text-yellow-300">CAMERA_RTSP_URL</code> in Railway environment variables:</p>
+                <p class="font-mono text-yellow-400/80 bg-black/40 px-2 py-1 rounded text-xs">rtsp://admin:pass@192.168.1.10:554/stream1</p>
+                <p class="text-gray-500">Hikvision / Dahua / Reolink / TP-Link all work</p>
+            </div>
+            <div class="space-y-1">
+                <p class="text-white text-xs font-medium mb-1">Option B — Phone IP Camera (HTTP)</p>
+                <p>Install <strong class="text-white">IP Webcam</strong> (Android) or <strong class="text-white">EpocCam</strong> (iOS), then set:</p>
+                <p class="font-mono text-yellow-400/80 bg-black/40 px-2 py-1 rounded text-xs">CAMERA_URL=http://192.168.1.xxx:8080/shot.jpg</p>
+                <p class="text-gray-500">Phone must be on the same network as the server, or use a tunnel (ngrok)</p>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+</div>
+
+<script>
+    function updateClock() {
+        const el = document.getElementById('cam-time');
+        if (el) {
+            el.textContent = new Date().toLocaleTimeString('en-PH', {
+                hour: '2-digit', minute: '2-digit', second: '2-digit'
+            });
+        }
+    }
+    setInterval(updateClock, 1000);
+    updateClock();
+
+    function handleFeedError() {
+        const img = document.getElementById('cam-frame');
+        if (img) {
+            // Retry the stream after 3 seconds
+            setTimeout(() => {
+                img.src = img.src.split('?')[0] + '?t=' + Date.now();
+            }, 3000);
+        }
+    }
+</script>
+{% endblock %}
