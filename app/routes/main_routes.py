@@ -78,26 +78,25 @@ def _generate_rtsp(rtsp_url):
     finally:
         process.kill()
 
-
 def _generate_snapshot(snapshot_url):
     """Poll an HTTP snapshot URL/Stream and emit MJPEG multipart frames."""
     headers = {
-        "Bypass-Tunnel-Reminder": "true",
         "User-Agent": "KafkamCCTV/1.0"
     }
     
-    # Check if we are pointing directly to an MJPEG streaming endpoint (/video)
-    if snapshot_url.endswith('/video'):
+    # Force direct chunk pass-through for live media feeds like MediaMTX/Bore
+    if 'bore.pub' in snapshot_url or snapshot_url.endswith('/video') or 'cam1' in snapshot_url:
         try:
             # Stream directly from the proxy tunnel to save processing overhead
             with requests.get(snapshot_url, headers=headers, stream=True, timeout=10) as r:
                 for chunk in r.iter_content(chunk_size=4096):
                     if chunk:
                         yield chunk
-        except Exception:
+        except Exception as e:
+            print(f"Streaming error: {e}")
             time.sleep(1)
     else:
-        # Fallback to standard snapshot frame-by-frame polling loop
+        # Fallback to standard snapshot frame-by-frame polling loop for raw static JPEGs
         while True:
             try:
                 response = requests.get(snapshot_url, headers=headers, timeout=5)
@@ -108,7 +107,6 @@ def _generate_snapshot(snapshot_url):
             except Exception:
                 pass
             time.sleep(0.1)  # ~10 fps
-
 
 def _generate_demo():
     """Generate a live demo test pattern via ffmpeg (no hardware needed)."""
