@@ -192,27 +192,11 @@ def get_camera_name():
 
 
 def check_camera_live(camera_url, timeout=3):
-    if not camera_url or not _validate_camera_url(camera_url, 'snapshot'):
-        return False
-
-    try:
-        headers = {
-            "User-Agent": "KafkamCCTV/1.0",
-            "Accept": "*/*"
-        }
-
-        response = requests.get(
-            camera_url,
-            headers=headers,
-            timeout=timeout,
-            stream=True,
-            allow_redirects=False
-        )
-
-        return response.status_code == 200
-
-    except Exception:
-        return False
+    # Server-side HTTP checks are unreliable for Cloudflare tunnel URLs —
+    # Cloudflare challenges non-browser requests and Railway's egress IPs
+    # are often blocked or redirected. We trust the URL is live if it's
+    # validly configured; the /camera-feed proxy will surface real errors.
+    return bool(camera_url and _validate_camera_url(camera_url, 'snapshot'))
 
 
 # ─────────────────────────────────────────────────────────────
@@ -283,10 +267,14 @@ def _generate_snapshot(snapshot_url):
         "User-Agent": "KafkamCCTV/1.0"
     }
 
-    is_mjpeg_stream = any(
-        tok in snapshot_url
-        for tok in ('bore.pub', 'cam1', '/video', '/stream', '/mjpeg')
+    # Detect MJPEG streams — includes Cloudflare tunnel domains and common
+    # stream path patterns. allow_redirects=True so CF tunnel redirects work.
+    _MJPEG_TOKENS = (
+        'bore.pub', 'cam1', '/video', '/stream', '/mjpeg',
+        '.trycloudflare.com', '.cfargotunnel.com', 'cloudflare',
+        '/feed', '/live',
     )
+    is_mjpeg_stream = any(tok in snapshot_url for tok in _MJPEG_TOKENS)
 
     if is_mjpeg_stream:
         while True:
@@ -295,8 +283,8 @@ def _generate_snapshot(snapshot_url):
                     snapshot_url,
                     headers=headers,
                     stream=True,
-                    timeout=5,
-                    allow_redirects=False
+                    timeout=10,
+                    allow_redirects=True
                 ) as r:
 
                     if r.status_code == 200:
@@ -315,7 +303,7 @@ def _generate_snapshot(snapshot_url):
                     snapshot_url,
                     headers=headers,
                     timeout=5,
-                    allow_redirects=False
+                    allow_redirects=True
                 )
 
                 if response.status_code == 200:
