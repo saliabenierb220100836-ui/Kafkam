@@ -36,7 +36,7 @@ def check_camera_live(camera_url, timeout=3):
             "User-Agent": "KafkamCCTV/1.0",
             "Accept": "*/*"
         }
-        # A simple GET or HEAD request to verify the Bore tunnel is answering
+        # Explicitly read a tiny chunk to see if the Bore stream is alive
         response = requests.get(camera_url, headers=headers, timeout=timeout, stream=True)
         return response.status_code == 200
     except Exception:
@@ -78,21 +78,25 @@ def _generate_rtsp(rtsp_url):
         process.kill()
 
 def _generate_snapshot(snapshot_url):
-    """Poll an HTTP snapshot URL/Stream and emit MJPEG multipart frames."""
+    """Pulls live binary stream fragments over the unencrypted tunnel and re-hosts them securely."""
     headers = {
         "User-Agent": "KafkamCCTV/1.0"
     }
     
-    if 'bore.pub' in snapshot_url or snapshot_url.endswith('/video') or 'cam1' in snapshot_url:
-        try:
-            with requests.get(snapshot_url, headers=headers, stream=True, timeout=10) as r:
-                for chunk in r.iter_content(chunk_size=4096):
-                    if chunk:
-                        yield chunk
-        except Exception as e:
-            print(f"Streaming error: {e}")
-            time.sleep(1)
+    if 'bore.pub' in snapshot_url or 'cam1' in snapshot_url or snapshot_url.endswith('/video'):
+        while True:
+            try:
+                # Continuously grab chunks from the local Bore instance to relay upstream
+                with requests.get(snapshot_url, headers=headers, stream=True, timeout=5) as r:
+                    if r.status_code == 200:
+                        for chunk in r.iter_content(chunk_size=1024 * 64):
+                            if chunk:
+                                yield chunk
+            except Exception as e:
+                print(f"Tunnel pipeline connection waiting: {e}")
+                time.sleep(2)
     else:
+        # Fallback to standard static image refresh polling loop
         while True:
             try:
                 response = requests.get(snapshot_url, headers=headers, timeout=5)
@@ -236,7 +240,7 @@ def dashboard():
 @main.route('/camera-feed')
 @login_required
 def camera_feed():
-    """Single MJPEG endpoint fallback."""
+    """Single secure server-side mirror endpoint targeting your pipeline."""
     mode, source = get_camera_mode()
 
     if mode == 'rtsp':

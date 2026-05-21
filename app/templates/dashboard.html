@@ -25,7 +25,7 @@
             </span>
             {% elif camera_mode == 'snapshot' %}
             <span class="text-xs text-purple-400 bg-purple-950/50 px-3 py-1.5 rounded border border-purple-700/50 tracking-wide font-medium uppercase">
-                MediaMTX Tunnel
+                HTTP Proxy Feed
             </span>
             {% endif %}
 
@@ -45,20 +45,11 @@
 
                 {% if camera_online %}
 
-                    {% if camera_mode == 'snapshot' and camera_raw_url %}
-                        <iframe src="{{ camera_raw_url }}" 
-                                class="w-full h-full absolute inset-0"
-                                style="border: none; background: black;"
-                                allow="autoplay; encrypted-media; fullscreen" 
-                                allowfullscreen>
-                        </iframe>
-                    {% else %}
-                        <img id="cam-frame"
-                             src="{{ url_for('main.camera_feed') }}"
-                             class="w-full h-full object-cover absolute inset-0"
-                             alt="Live camera feed"
-                             onerror="handleFeedError()">
-                    {% endif %}
+                <img id="cam-frame"
+                     src="{{ url_for('main.camera_feed') }}"
+                     class="w-full h-full object-cover absolute inset-0"
+                     alt="Live camera feed"
+                     onerror="handleFeedError()">
 
                 <div class="absolute top-3 left-3 z-10 flex items-center gap-2 bg-white/10 text-white text-xs px-3 py-1 rounded-sm border border-white/20">
                     <div class="w-2 h-2 bg-white rounded-full animate-pulse"></div>
@@ -97,10 +88,10 @@
 
             <div class="p-4 bg-black/70 border-t border-white/10 flex items-center justify-between">
                 <div>
-                    <h3 class="font-semibold text-white tracking-wider text-sm">{{ camera_name or "Phone Camera" }}</h3>
+                    <h3 class="font-semibold text-white tracking-wider text-sm">{{ camera_name }}</h3>
                     <p class="text-xs text-gray-500 mt-0.5">
                         {% if camera_mode == 'rtsp' %}RTSP stream via ffmpeg
-                        {% elif camera_mode == 'snapshot' %}MediaMTX Tunnel Player
+                        {% elif camera_mode == 'snapshot' %}Secure Tunnel Pipeline Proxy
                         {% else %}Demo — no hardware connected
                         {% endif %}
                     </p>
