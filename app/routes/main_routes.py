@@ -32,12 +32,11 @@ def check_camera_live(camera_url, timeout=3):
     if not camera_url:
         return False
     try:
-        # Inject bypass headers so LocalTunnel skips the IP verification landing screen
         headers = {
-            "Bypass-Tunnel-Reminder": "true",
             "User-Agent": "KafkamCCTV/1.0",
-            "Accept": "image/webp,image/apng,image/*,*/*;q=0.8"
+            "Accept": "*/*"
         }
+        # A simple GET or HEAD request to verify the Bore tunnel is answering
         response = requests.get(camera_url, headers=headers, timeout=timeout, stream=True)
         return response.status_code == 200
     except Exception:
@@ -84,10 +83,8 @@ def _generate_snapshot(snapshot_url):
         "User-Agent": "KafkamCCTV/1.0"
     }
     
-    # Force direct chunk pass-through for live media feeds like MediaMTX/Bore
     if 'bore.pub' in snapshot_url or snapshot_url.endswith('/video') or 'cam1' in snapshot_url:
         try:
-            # Stream directly from the proxy tunnel to save processing overhead
             with requests.get(snapshot_url, headers=headers, stream=True, timeout=10) as r:
                 for chunk in r.iter_content(chunk_size=4096):
                     if chunk:
@@ -96,7 +93,6 @@ def _generate_snapshot(snapshot_url):
             print(f"Streaming error: {e}")
             time.sleep(1)
     else:
-        # Fallback to standard snapshot frame-by-frame polling loop for raw static JPEGs
         while True:
             try:
                 response = requests.get(snapshot_url, headers=headers, timeout=5)
@@ -217,24 +213,30 @@ def login():
 @main.route('/dashboard')
 @login_required
 def dashboard():
-    camera_url = os.getenv('CAMERA_URL', '')
+    mode, source = get_camera_mode()
     
-    # Simple boolean flags to pass template parameters
-    camera_online = True if camera_url else False
-    camera_mode = 'snapshot' if camera_url else 'demo'
-    
+    if mode == 'snapshot' and source:
+        camera_online = check_camera_live(source)
+    elif mode == 'rtsp' and source:
+        camera_online = True
+    else:
+        camera_online = True
+        mode = 'demo'
+
+    log_action('Viewed Dashboard')
+
     return render_template(
         'dashboard.html', 
         camera_online=camera_online, 
-        camera_mode=camera_mode,
-        camera_raw_url=camera_url, # Passes http://bore.pub:xxxxx/cam1 directly to iframe
+        camera_mode=mode,
+        camera_raw_url=source, 
         camera_name="Live Remote Feed"
     )
 
 @main.route('/camera-feed')
 @login_required
 def camera_feed():
-    """Single MJPEG endpoint that handles RTSP, snapshot, and demo modes."""
+    """Single MJPEG endpoint fallback."""
     mode, source = get_camera_mode()
 
     if mode == 'rtsp':
