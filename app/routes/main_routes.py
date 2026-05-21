@@ -258,68 +258,58 @@ def _generate_rtsp(rtsp_url):
         process.kill()
 
 
-def _generate_snapshot(snapshot_url):
+def _proxy_snapshot(snapshot_url):
+    """
+    Transparent stream proxy for snapshot/MJPEG sources.
+
+    Passes the upstream Content-Type (including its multipart boundary)
+    straight through to the browser so the boundary strings always match.
+    IP Webcam /video uses its own boundary (e.g. --ipcamera); wrapping it
+    in a second boundary=frame causes a blank screen.
+    """
     if not _validate_camera_url(snapshot_url, 'snapshot'):
         logger.error("Blocked invalid snapshot URL: %s", snapshot_url)
-        return
+        abort(400)
 
-    headers = {
-        "User-Agent": "KafkamCCTV/1.0"
+    upstream_headers = {
+        "User-Agent": "Mozilla/5.0 (compatible; KafkamCCTV/1.0)",
+        "Accept": "*/*",
     }
 
-    # Detect MJPEG streams — includes Cloudflare tunnel domains and common
-    # stream path patterns. allow_redirects=True so CF tunnel redirects work.
-    _MJPEG_TOKENS = (
-        'bore.pub', 'cam1', '/video', '/stream', '/mjpeg',
-        '.trycloudflare.com', '.cfargotunnel.com', 'cloudflare',
-        '/feed', '/live',
+    try:
+        r = requests.get(
+            snapshot_url,
+            headers=upstream_headers,
+            stream=True,
+            timeout=15,
+            allow_redirects=True,
+        )
+    except Exception as e:
+        logger.error("Snapshot proxy connect error: %s", e)
+        abort(502)
+
+    # Pass the upstream Content-Type (with its real boundary) to the browser
+    content_type = r.headers.get(
+        'Content-Type',
+        'multipart/x-mixed-replace; boundary=frame'
     )
-    is_mjpeg_stream = any(tok in snapshot_url for tok in _MJPEG_TOKENS)
 
-    if is_mjpeg_stream:
-        while True:
-            try:
-                with requests.get(
-                    snapshot_url,
-                    headers=headers,
-                    stream=True,
-                    timeout=10,
-                    allow_redirects=True
-                ) as r:
+    def generate():
+        try:
+            for chunk in r.iter_content(chunk_size=32 * 1024):
+                if chunk:
+                    yield chunk
+        except Exception as e:
+            logger.debug("Snapshot proxy stream error: %s", e)
+        finally:
+            r.close()
 
-                    if r.status_code == 200:
-                        for chunk in r.iter_content(chunk_size=64 * 1024):
-                            if chunk:
-                                yield chunk
-
-            except Exception as e:
-                logger.debug("Stream reconnect: %s", e)
-                time.sleep(2)
-
-    else:
-        while True:
-            try:
-                response = requests.get(
-                    snapshot_url,
-                    headers=headers,
-                    timeout=5,
-                    allow_redirects=True
-                )
-
-                if response.status_code == 200:
-                    frame = response.content[:10 * 1024 * 1024]
-
-                    yield (
-                        b'--frame\r\n'
-                        b'Content-Type: image/jpeg\r\n\r\n'
-                        + frame +
-                        b'\r\n'
-                    )
-
-            except Exception:
-                pass
-
-            time.sleep(0.1)
+    return Response(
+        stream_with_context(generate()),
+        content_type=content_type,
+        headers={'Cache-Control': 'no-cache, no-store'},
+        direct_passthrough=True,
+    )
 
 
 def _generate_demo():
@@ -526,18 +516,21 @@ def camera_feed():
     mode, source = get_camera_mode()
 
     if mode == 'rtsp':
-        generator = _generate_rtsp(source)
+        return Response(
+            stream_with_context(_generate_rtsp(source)),
+            mimetype='multipart/x-mixed-replace; boundary=frame'
+        )
 
     elif mode == 'snapshot':
-        generator = _generate_snapshot(source)
+        # _proxy_snapshot returns a Response directly with the upstream
+        # Content-Type header so the browser gets the correct boundary string
+        return _proxy_snapshot(source)
 
     else:
-        generator = _generate_demo()
-
-    return Response(
-        stream_with_context(generator),
-        mimetype='multipart/x-mixed-replace; boundary=frame'
-    )
+        return Response(
+            stream_with_context(_generate_demo()),
+            mimetype='multipart/x-mixed-replace; boundary=frame'
+        )
 
 
 @main.route('/camera-status')
