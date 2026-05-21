@@ -217,25 +217,19 @@ def login():
 @main.route('/dashboard')
 @login_required
 def dashboard():
-    mode, source = get_camera_mode()
-
-    if mode == 'snapshot':
-        camera_online = check_camera_live(source)
-    elif mode == 'rtsp':
-        camera_online = True
-    else:
-        camera_online = True
-
-    camera_name = os.environ.get('CAMERA_NAME', 'Main Entrance')
-
+    camera_url = os.getenv('CAMERA_URL', '')
+    
+    # Simple boolean flags to pass template parameters
+    camera_online = True if camera_url else False
+    camera_mode = 'snapshot' if camera_url else 'demo'
+    
     return render_template(
-        'dashboard.html',
-        camera_name=camera_name,
-        camera_online=camera_online,
-        camera_mode=mode,
-        camera_source=source or '',
+        'dashboard.html', 
+        camera_online=camera_online, 
+        camera_mode=camera_mode,
+        camera_raw_url=camera_url, # Passes http://bore.pub:xxxxx/cam1 directly to iframe
+        camera_name="Live Remote Feed"
     )
-
 
 @main.route('/camera-feed')
 @login_required
